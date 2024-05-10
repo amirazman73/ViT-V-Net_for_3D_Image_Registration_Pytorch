@@ -221,124 +221,6 @@ class Conv3dReLU(nn.Sequential):
         super(Conv3dReLU, self).__init__(conv, bn, relu)
 
 
-class DecoderBlock(nn.Module):
-    def __init__(
-            self,
-            in_channels,
-            out_channels,
-            skip_channels=0,
-            use_batchnorm=True,
-    ):
-        super().__init__()
-        self.conv1 = Conv3dReLU(
-            in_channels + skip_channels,
-            out_channels,
-            kernel_size=3,
-            padding=1,
-            use_batchnorm=use_batchnorm,
-        )
-        self.conv2 = Conv3dReLU(
-            out_channels,
-            out_channels,
-            kernel_size=3,
-            padding=1,
-            use_batchnorm=use_batchnorm,
-        )
-        self.up = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
-
-    def forward(self, x, skip=None):
-        x = self.up(x)
-        if skip is not None:
-            x = torch.cat([x, skip], dim=1)
-        x = self.conv1(x)
-        x = self.conv2(x)
-        return x
-
-class DecoderCup(nn.Module):
-    def __init__(self, config, img_size):
-        super().__init__()
-        self.config = config
-        self.down_factor = config.down_factor
-        head_channels = config.conv_first_channel
-        self.img_size = img_size
-        self.conv_more = Conv3dReLU(
-            config.hidden_size,
-            head_channels,
-            kernel_size=3,
-            padding=1,
-            use_batchnorm=True,
-        )
-        decoder_channels = config.decoder_channels
-        in_channels = [head_channels] + list(decoder_channels[:-1])
-        out_channels = decoder_channels
-        self.patch_size = _triple(config.patches["size"])
-        skip_channels = self.config.skip_channels
-        blocks = [
-            DecoderBlock(in_ch, out_ch, sk_ch) for in_ch, out_ch, sk_ch in zip(in_channels, out_channels, skip_channels)
-        ]
-        self.blocks = nn.ModuleList(blocks)
-
-    def forward(self, hidden_states, features=None):
-        B, n_patch, hidden = hidden_states.size()  # reshape from (B, n_patch, hidden) to (B, h, w, hidden)
-        l, h, w = (self.img_size[0]//2**self.down_factor//self.patch_size[0]), (self.img_size[1]//2**self.down_factor//self.patch_size[1]), (self.img_size[2]//2**self.down_factor//self.patch_size[2])
-        x = hidden_states.permute(0, 2, 1)
-        x = x.contiguous().view(B, hidden, l, h, w)
-        x = self.conv_more(x)
-        for i, decoder_block in enumerate(self.blocks):
-            if features is not None:
-                skip = features[i] if (i < self.config.n_skip) else None
-                #print(skip.shape)
-            else:
-                skip = None
-            x = decoder_block(x, skip=skip)
-        return x
-
-class SpatialTransformer(nn.Module):
-    """
-    N-D Spatial Transformer
-
-    Obtained from https://github.com/voxelmorph/voxelmorph
-    """
-
-    def __init__(self, size, mode='bilinear'):
-        super().__init__()
-
-        self.mode = mode
-
-        # create sampling grid
-        vectors = [torch.arange(0, s) for s in size]
-        grids = torch.meshgrid(vectors)
-        grid = torch.stack(grids)
-        grid = torch.unsqueeze(grid, 0)
-        grid = grid.type(torch.FloatTensor)
-
-        # registering the grid as a buffer cleanly moves it to the GPU, but it also
-        # adds it to the state dict. this is annoying since everything in the state dict
-        # is included when saving weights to disk, so the model files are way bigger
-        # than they need to be. so far, there does not appear to be an elegant solution.
-        # see: https://discuss.pytorch.org/t/how-to-register-buffer-without-polluting-state-dict
-        self.register_buffer('grid', grid)
-
-    def forward(self, src, flow):
-        # new locations
-        new_locs = self.grid + flow
-        shape = flow.shape[2:]
-
-        # need to normalize grid values to [-1, 1] for resampler
-        for i in range(len(shape)):
-            new_locs[:, i, ...] = 2 * (new_locs[:, i, ...] / (shape[i] - 1) - 0.5)
-
-        # move channels dim to last position
-        # also not sure why, but the channels need to be reversed
-        if len(shape) == 2:
-            new_locs = new_locs.permute(0, 2, 3, 1)
-            new_locs = new_locs[..., [1, 0]]
-        elif len(shape) == 3:
-            new_locs = new_locs.permute(0, 2, 3, 4, 1)
-            new_locs = new_locs[..., [2, 1, 0]]
-
-        return nnf.grid_sample(src, new_locs, align_corners=True, mode=self.mode)
-
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 
@@ -395,24 +277,12 @@ class CNNEncoder(nn.Module):
             features.append(feats_down)
         return feats, features[::-1]
 
-class RegistrationHead(nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size=3, upsampling=1):
-        conv3d = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, padding=kernel_size // 2)
-        conv3d.weight = nn.Parameter(Normal(0, 1e-5).sample(conv3d.weight.shape))
-        conv3d.bias = nn.Parameter(torch.zeros(conv3d.bias.shape))
-        super().__init__(conv3d)
 
 class ViTVNet(nn.Module):
     def __init__(self, config, img_size=(64, 256, 256), int_steps=7, vis=False):
         super(ViTVNet, self).__init__()
         self.transformer = Transformer(config, img_size, vis)
-        self.decoder = DecoderCup(config, img_size)
-        self.reg_head = RegistrationHead(
-            in_channels=config.decoder_channels[-1],
-            out_channels=config['n_dims'],
-            kernel_size=3,
-        )
-        self.spatial_trans = SpatialTransformer(img_size)
+
         self.config = config
         #self.integrate = VecInt(img_size, int_steps)
     def forward(self, x):
@@ -439,7 +309,7 @@ class VecInt(nn.Module):
         assert nsteps >= 0, 'nsteps should be >= 0, found: %d' % nsteps
         self.nsteps = nsteps
         self.scale = 1.0 / (2 ** self.nsteps)
-        self.transformer = SpatialTransformer(inshape)
+        #self.transformer = SpatialTransformer(inshape)
 
     def forward(self, vec):
         vec = vec * self.scale
