@@ -111,6 +111,17 @@ class Mlp(nn.Module):
         x = self.fc2(x)
         x = self.dropout(x)
         return x
+    
+class ClassificationHead(nn.Module):
+    def __init__(self, hidden_size, num_classes):
+        super(ClassificationHead, self).__init__()
+        self.dense = nn.Linear(hidden_size, num_classes)  # Map to the number of classes
+        self.dropout = nn.Dropout(0.5)  # Optional dropout for regularization
+
+    def forward(self, x):
+        x = self.dropout(x)  # Apply dropout
+        x = self.dense(x)  # Output layer
+        return x
 
 
 class Embeddings(nn.Module):
@@ -279,22 +290,28 @@ class CNNEncoder(nn.Module):
 
 
 class ViTVNet(nn.Module):
-    def __init__(self, config, img_size=(64, 256, 256), int_steps=7, vis=False):
+    def __init__(self, config, img_size=(64, 256, 256), num_classes=3, vis=False):
         super(ViTVNet, self).__init__()
         self.transformer = Transformer(config, img_size, vis)
+        self.classifier = ClassificationHead(config.hidden_size, num_classes)  # Add classification head
 
-        self.config = config
-        #self.integrate = VecInt(img_size, int_steps)
+        # Freeze the encoder layers
+        self.freeze_encoder()
+
+    def freeze_encoder(self):
+        # Freeze all parameters in the encoder
+        for param in self.transformer.encoder.parameters():
+            param.requires_grad = False
+
     def forward(self, x):
+        # Assuming x is the input volume
+        _, attn_weights, features = self.transformer(x)  # (B, n_patch, hidden)
 
-        source = x[:,0:1,:,:]
+        x = features.mean(dim=1)  # Global average pooling across patches
 
-        x, attn_weights, features = self.transformer(x)  # (B, n_patch, hidden)
-        x = self.decoder(x, features)
-        flow = self.reg_head(x)
-        #flow = self.integrate(flow)
-        out = self.spatial_trans(source, flow)
-        return out, flow
+        class_output = self.classifier(x)
+        return class_output
+
 
 class VecInt(nn.Module):
     """
