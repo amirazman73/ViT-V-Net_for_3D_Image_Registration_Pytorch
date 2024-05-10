@@ -123,6 +123,29 @@ class ClassificationHead(nn.Module):
         x = self.dense(x)  # Output layer
         return x
 
+"""
+#Template to try different options
+class ClassificationHead(nn.Module):
+    def __init__(self, hidden_size, num_classes):
+        super(ClassificationHead, self).__init__()
+        self.dense1 = nn.Linear(hidden_size, hidden_size * 2)  # Increase dimension
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(0.5)
+        self.dense2 = nn.Linear(hidden_size * 2, hidden_size)  # Optional additional layer
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(0.5)
+        self.final = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x):
+        x = self.dense1(x)
+        x = self.relu1(x)
+        x = self.dropout1(x)
+        x = self.dense2(x)
+        x = self.relu2(x)
+        x = self.dropout2(x)
+        x = self.final(x)
+        return x
+"""
 
 class Embeddings(nn.Module):
     """Construct the embeddings from patch, position embeddings.
