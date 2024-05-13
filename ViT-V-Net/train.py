@@ -42,8 +42,8 @@ def main():
     max_epoch = 500
     cont_training = False
     config_vit = CONFIGS_ViT_seg['ViT-V-Net']
-    reg_model = utils.register_model((160, 192, 224), 'nearest')
-    reg_model.cuda()
+    #reg_model = utils.register_model((160, 192, 224), 'nearest')
+    #reg_model.cuda()
     model = models.ViTVNet(config_vit, img_size=(160, 192, 224))
     if cont_training:
         epoch_start = 335
@@ -140,7 +140,7 @@ def main():
                 # y = y.squeeze(0).permute(1, 0, 2, 3)
                 x_in = torch.cat((x, y), dim=1)
                 output = model(x_in)
-                def_out = reg_model([x_seg.cuda().float(), output[1].cuda()])
+                #def_out = reg_model([x_seg.cuda().float(), output[1].cuda()])
                 dsc = utils.dice_val(def_out.long(), y_seg.long(), 46)
                 eval_dsc.update(dsc.item(), x.size(0))
                 print(eval_dsc.avg)
